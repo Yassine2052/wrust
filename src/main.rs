@@ -3,6 +3,7 @@ mod thread_pool;
 mod wrust;
 pub mod router;
 pub mod person;
+mod route_builder;
 
 extern crate lazy_static;
 
@@ -23,6 +24,18 @@ fn main(){
 
         router.get(String::from("/get"), Box::new(move | _request, response| {
             response.json(DATA.clone().read().unwrap().clone())
+        }));
+
+        router.get(String::from("/get-view"), Box::new(move | _request, response| {
+            response.view("")
+        }));
+
+        router.get(String::from("/get-nested-view"), Box::new(move | _request, response| {
+            response.view("nested")
+        }));
+
+        router.get(String::from("/get-nested-view-test"), Box::new(move | _request, response| {
+            response.view("nested/test")
         }));
 
         router.post(String::from("/create?name&age:int&ids:int+"), Box::new(move | _request, response| {

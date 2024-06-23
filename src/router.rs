@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::{Debug};
-use shared::request::{HttpMethod};
+use shared::request::{HttpMethod, Request};
+use shared::response::Response;
 use shared::route::{Handler, MethodsHashMap, Route, RouteMethod};
 use shared::route::RouteMethod::{RouteAny, RouteGet, RoutePost};
 
@@ -29,9 +30,13 @@ impl Router {
         self.add_route(RouteAny, path, handler)
     }
 
-    fn add_route(&mut self, method: RouteMethod, path: String, handler: Box<Handler>) -> &Self {
+    fn add_route(&mut self, method: RouteMethod, mut path: String, handler: Box<Handler>) -> &Self {
         if self.listening {
             return self;
+        }
+
+        if !path.starts_with('/') {
+            path.insert(0, '/');
         }
 
         let (route, path) = Route::new(path.clone(), handler);

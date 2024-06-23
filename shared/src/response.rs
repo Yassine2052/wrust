@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::{env, fs};
 use serde::Serialize;
 use crate::constants::{CONTENT_TYPE_HEADER, CONTENT_TYPE_MAP, DEFAULT_CONTENT_TYPE};
 
@@ -11,6 +12,7 @@ pub struct Response {
 }
 
 pub type ResponseResult = Result<Response, String>;
+
 
 impl Response {
     pub fn new() -> Self {
@@ -47,12 +49,11 @@ impl Response {
 
     pub fn json<T>(&mut self, data: T) -> &Self
     where T: Serialize {
-        if let Some(&content_type) = CONTENT_TYPE_MAP.get("json") {
-            self.headers.insert(String::from(CONTENT_TYPE_HEADER), String::from(content_type));
-        }
-
         match serde_json::to_string(&data) {
             Ok(data) => {
+                if let Some(&content_type) = CONTENT_TYPE_MAP.get("json") {
+                    self.headers.insert(String::from(CONTENT_TYPE_HEADER), String::from(content_type));
+                }
                 self.data = data;
             },
             Err(err) => {
@@ -61,6 +62,49 @@ impl Response {
 
                 self.data = message;
                 self.status(500);
+            }
+        };
+
+        self
+    }
+
+    pub fn view(&mut self, file_name: &str) -> &Self {
+        let current_dir = env::current_dir().unwrap();
+        let mut path = current_dir.as_path().join("src/views");
+
+        let mut file_name = String::from(file_name);
+
+        path = path.join(file_name.clone());
+
+        if path.is_dir() {
+            path = path.join("index.html");
+        } else {
+            if !file_name.ends_with(".html") {
+                path.set_extension("html");
+            }
+        }
+
+        print!("{:?}", path);
+
+        match fs::read_to_string(path) {
+            Ok(content) => {
+                if let Some(&content_type) = CONTENT_TYPE_MAP.get("html") {
+                    self.headers.insert(String::from(CONTENT_TYPE_HEADER), String::from(content_type));
+                }
+
+                self.data = content;
+            },
+            Err(err) => {
+                match err.kind() {
+                    std::io::ErrorKind::PermissionDenied => {
+                        self.data = String::from("Access Denied");
+                        self.status(500);
+                    },
+                    _ => {
+                        self.data = String::from("Not Found");
+                        self.status(404);
+                    }
+                }
             }
         };
 

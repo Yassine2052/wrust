@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 use lazy_static::lazy_static;
 
 pub const CONTENT_TYPE_HEADER: &str = "Content-Type";
