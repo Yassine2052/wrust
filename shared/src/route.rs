@@ -78,7 +78,7 @@ impl Route {
             "bool" => Boolean(false),
             "float" => Float(0.0),
             "int" => Int(0),
-            "unit" => UInt(0),
+            "uint" => UInt(0),
             _ => Str(String::new()),
         };
 

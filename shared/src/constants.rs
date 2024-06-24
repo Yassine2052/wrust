@@ -3,6 +3,8 @@ use std::path::Path;
 use lazy_static::lazy_static;
 
 pub const CONTENT_TYPE_HEADER: &str = "Content-Type";
+pub const COOKIES_HEADER: &str = "Cookie";
+pub const USER_AGENT_HEADER: &str = "User-Agent";
 pub const DEFAULT_CONTENT_TYPE: &str = "text/plain";
 pub const DEFAULT_STATUS_CODE : &str = "OK";
 

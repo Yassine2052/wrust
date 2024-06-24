@@ -6,3 +6,4 @@ pub mod query;
 pub mod response;
 pub mod constants;
 pub mod wrust_traits;
+pub mod form_data;

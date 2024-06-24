@@ -1,24 +1,21 @@
 use std::string::String;
-use std::any::Any;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::net::TcpStream;
+use serde_json::Value;
+use crate::constants::{CONTENT_TYPE_HEADER, COOKIES_HEADER, DEFAULT_CONTENT_TYPE, USER_AGENT_HEADER};
 use crate::error::RequestError;
+use crate::form_data::FormData;
 use crate::wrust_traits::InjectStructTrait;
 use crate::query::{QueriesHashMap, QueryParam, QueryParamValueType::{Str}};
 use crate::query::QueryParamValue::Multiple;
+use crate::request::RequestData::{Json, Text};
 use crate::route::{RouteMethod::{self, RouteGet, RoutePost}};
 use crate::url_encoding::UrlEncoding;
 
 pub type RequestQueriesHashMap = HashMap<String, QueryParam>;
-
-// Request Line method - path - http version
-pub struct HttpRequestFirstLine {
-    pub method: HttpMethod,
-    pub path: String,
-    pub http_version: String,
-    pub query_string: String
-}
+pub type RequestHeadersHashMap = HashMap<String, String>;
+pub type RequestCookiesHashMap = HashMap<String, String>;
 
 #[derive(Debug, Clone, Copy)]
 pub enum HttpMethod {
@@ -27,22 +24,38 @@ pub enum HttpMethod {
 }
 
 #[derive(Debug)]
+pub enum RequestData {
+    Json(Value),
+    Form(FormData),
+    Text(String)
+}
+
+// Request Line method - path - http version
+#[derive(Clone)]
+pub struct HttpRequestFirstLine {
+    pub method: HttpMethod,
+    pub path: String,
+    pub http_version: String,
+    pub query_string: String
+}
+
+#[derive(Debug)]
 pub struct IpAddress {
-    ipv4: String,
-    ipv6: Option<String>
+    value: String,
+    is_ipv6: bool
 }
 
 #[derive(Debug)]
 pub struct Request<T: InjectStructTrait = RequestQueriesHashMap>
 {
     pub path: String,
-    pub data: Box<dyn Any>,
     pub method: HttpMethod,
-    pub headers: HashMap<String, String>,
-    pub cookies: HashMap<String, String>,
+    pub headers: RequestHeadersHashMap,
+    pub cookies: RequestCookiesHashMap,
     pub queries_map: RequestQueriesHashMap,
     pub user_agent: String,
     pub ip: IpAddress,
+    pub data: RequestData,
     pub http_version: String,
     pub query_string: String,
     pub queries: T
@@ -74,59 +87,29 @@ impl HttpMethod {
 }
 
 impl IpAddress {
-    pub fn from(ipv4: String, ipv6: Option<String>) -> Self {
+    pub fn from(value: String, is_ipv6: bool) -> Self {
         Self {
-            ipv4,
-            ipv6
+            value,
+            is_ipv6
         }
     }
 }
 
 impl<T: InjectStructTrait> Request<T> {
-    fn from(path: String, method: HttpMethod, http_version: String, query_string: String) -> Self {
+    fn from(request_line: HttpRequestFirstLine, headers: RequestHeadersHashMap, cookies: RequestCookiesHashMap, ip: IpAddress, data: RequestData) -> Self {
         Self {
-            path,
-            method,
-            data: Box::new(String::new()),
-            headers: HashMap::new(),
-            cookies: HashMap::new(),
+            path: request_line.path,
+            method: request_line.method,
+            user_agent: headers.get(USER_AGENT_HEADER).unwrap_or(&String::new()).clone(),
+            http_version: request_line.http_version,
+            query_string: request_line.query_string,
             queries_map: RequestQueriesHashMap::new(),
             queries: T::init(),
-            user_agent: String::new(),
-            ip: IpAddress::from(String::from("127.0.0.1"), None),
-            http_version,
-            query_string,
+            data,
+            headers,
+            cookies,
+            ip
         }
-    }
-
-    pub fn read_request_data(stream: &TcpStream) -> Result<Request<T>, String> {
-        // Read request from input stream, to provide efficient reading of chars, arrays, and lines
-        let buf_reader = BufReader::new(stream);
-
-        // iterate Over Lines till finding an empty line (NO CRLF \r\n)
-        let http_request: Vec<_> = buf_reader
-            // Read Lines
-            .lines()
-            // Unwrap Result<Line> After Reading
-            .map(|result| result.unwrap())
-            // Iterate till finding an empty line (end of request content)
-            .take_while(|line| !line.is_empty())
-            // Convert to Vec
-            .collect();
-
-        if let Some(request_first_line) = http_request.first() {
-            println!("processing {:?}", request_first_line);
-
-            return match Self::extract_first_line_data(request_first_line) {
-                Ok(HttpRequestFirstLine{ method, http_version, path, query_string }) => {
-                    let request = Self::from(path, method, http_version, query_string);
-                    Ok(request)
-                },
-                Err(err) => Err(err)
-            }
-        }
-
-        Err(String::from("Invalid Http Request"))
     }
 
     pub fn map_queries(&mut self, queries_hash_map: &QueriesHashMap) -> Result<(), RequestError> {
@@ -210,7 +193,65 @@ impl<T: InjectStructTrait> Request<T> {
         Ok(())
     }
 
-    fn extract_first_line_data(request: &String) -> Result<HttpRequestFirstLine, String> {
+    pub fn read_request_data(stream: &TcpStream) -> Result<Request<T>, String> {
+        // Read request headers from input stream, to provide efficient reading of chars, arrays, and lines
+        let mut buf_reader = BufReader::new(stream);
+
+        // Store Headers Here
+        let mut http_request_header = Vec::new();
+
+        // Content Length used to extract the body
+        let mut content_length = 0usize;
+
+        // Ip Address
+        let ip = if let Ok(socket_addr) = stream.peer_addr() {
+            let value = socket_addr.ip().to_string();
+
+            IpAddress {
+                value,
+                is_ipv6: socket_addr.is_ipv6()
+            }
+        } else {
+            return Err(String::from("No Ip Address Specified"));
+        };
+
+        // Iterate over lines till finding an empty line (NO CRLF \r\n)
+        for line in buf_reader.by_ref().lines() {
+            if let Ok(line) = line {
+                if line.is_empty() {
+                    break;
+                }
+
+                if line.to_lowercase().starts_with("content-length:") {
+                    if let Ok(value) = line["content-length:".len()..].trim().parse::<usize>() {
+                        content_length = value;
+                    }
+                }
+
+                http_request_header.push(line);
+                continue;
+            }
+
+            return Err(String::from("Invalid Http Request"));
+        }
+
+        if let Some(request_first_line) = http_request_header.first() {
+            println!("processing {:?}", request_first_line);
+
+            let request_line = Self::extract_request_line(request_first_line)?;
+            let (headers, cookies) = Self::extract_headers_and_cookies(&http_request_header);
+
+            let content_type = headers.get(CONTENT_TYPE_HEADER).unwrap_or(&String::from(DEFAULT_CONTENT_TYPE)).clone();
+            let data = Self::extract_request_data(buf_reader.by_ref(), request_line.method, content_length, content_type);
+
+            let request = Self::from(request_line, headers, cookies, ip, data);
+            return Ok(request);
+        }
+
+        Err(String::from("Invalid Http Request"))
+    }
+
+    fn extract_request_line(request: &String) -> Result<HttpRequestFirstLine, String> {
         let request_split = request.split(' ').collect::<Vec<&str>>();
 
         if request_split.len() != 3 {
@@ -245,5 +286,63 @@ impl<T: InjectStructTrait> Request<T> {
             http_version,
             query_string
         });
+    }
+
+    fn extract_headers_and_cookies(request: &Vec<String>) -> (RequestHeadersHashMap, RequestCookiesHashMap) {
+        let mut headers = RequestHeadersHashMap::new();
+        let mut cookies = RequestCookiesHashMap::new();
+
+        for i in 1..request.len() {
+            if let Some((header_name, header_value)) = request[i].split_once(": ") {
+                let header_value = String::from(header_value);
+
+                match header_name {
+                    COOKIES_HEADER => {
+                        let cookies_array = header_value.split("; ").collect::<Vec<&str>>();
+                        for cookie in cookies_array {
+                            if let Some((cookie_name, cookie_value)) = cookie.split_once('=') {
+                                let cookie_name = String::from(cookie_name);
+                                let cookie_value = String::from(cookie_value);
+
+                                cookies.insert(cookie_name, cookie_value);
+                            }
+                        }
+                    },
+                    _ => {
+                        headers.insert(String::from(header_name), header_value);
+                    }
+                }
+
+            }
+        }
+
+        (headers, cookies)
+    }
+
+    fn extract_request_data(buf_reader: &mut BufReader<&TcpStream>, method: HttpMethod, content_length: usize, content_type: String) -> RequestData {
+        match method {
+            HttpMethod::POST => {
+                match content_type.to_lowercase().as_str() {
+                    "application/json" => {
+                        let mut body = vec![0; content_length];
+                        buf_reader.read_exact(&mut body).unwrap();
+
+                        match String::from_utf8(body) {
+                            Ok(body_string) => {
+                                match serde_json::from_str(body_string.as_str()) {
+                                    Ok(value) => return Json(value),
+                                    _ => ()
+                                }
+                            },
+                            _ => ()
+                        }
+                    },
+                    _ => ()
+                }
+            },
+            _ => ()
+        };
+
+        Text(String::new())
     }
 }

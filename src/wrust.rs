@@ -2,7 +2,6 @@ use std::io::Write;
 use std::net::{TcpListener};
 use std::sync::{Arc, Mutex, RwLock};
 use shared::constants::{DEFAULT_STATUS_CODE, STATUS_CODES_MAP};
-use shared::wrust_traits::InjectStructTrait;
 use shared::request::{Request};
 use shared::response::Response;
 use crate::router::Router;
@@ -74,9 +73,9 @@ impl WRust {
                                                         }
                                                     }
                                                 },
-                                                Err(request_error) => {
+                                                Err(err) => {
                                                     response.status(400);
-                                                    response.json(request_error);
+                                                    response.json(err);
                                                 }
                                             }
                                         },
@@ -99,7 +98,7 @@ impl WRust {
                     };
 
                     let content = response.get_data();
-                    let content_length = content.len();
+                    let content_length = content.bytes().len();
                     let content_type = response.get_content_type();
                     let status_code = response.get_status();
                     let status_code_description = Self::get_status_code_description(status_code.clone());
@@ -138,7 +137,7 @@ impl WRust {
     }
 
     fn port_is_available(port: u16) -> Option<TcpListener> {
-        match TcpListener::bind(("127.0.0.1", port)) {
+        match TcpListener::bind(("192.168.1.55", port)) {
             Ok(listener) => Some(listener),
             _ => None
         }
